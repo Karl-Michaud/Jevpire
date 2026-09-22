@@ -1,0 +1,28 @@
+# --- data: never committed (size + MLB redistribution terms, see PLAN.md §18) ---
+data/
+!data/sample/
+*.mp4
+*.parquet
+
+# --- secrets ---
+.env
+.env.local
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
