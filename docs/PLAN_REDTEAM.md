@@ -242,21 +242,183 @@ Added as an interpretation note to §10.3.
 
 ---
 
+---
+
+# Round 3 — fresh sweep over the revised plan
+
+Round 2 verified the round-1 fixes; it was not a new attack. Round 3 targets claims that had
+never been tested. Five findings, **three of which changed a decision.**
+
+Reproduce with `uv run python scripts/redteam_round3.py` (RT-7, RT-8, RT-9). RT-10 and RT-11
+come from frame extraction with ffmpeg.
+
+---
+
+## RT-7 — Is the condition-D leakage tripwire valid? **Resolved: yes, and now calibrated.**
+
+**Challenge.** §7.2 said "if condition D (context only) scores well above the base rate,
+location is leaking — a bug." But count is strongly predictive of location, so condition D
+might legitimately beat the base rate and the tripwire would fire falsely.
+
+**Measurement** (GBM, group-split by game, no location features):
+
+| Feature set | Accuracy | vs base rate |
+|---|---|---|
+| base rate (always BALL) | 69.28 % | — |
+| count only | 69.80 % | +0.52 pp |
+| count + handedness | 69.72 % | +0.44 pp |
+| + pitch type / velo / movement | 69.56 % | +0.28 pp |
+| full condition D | 69.76 % | +0.48 pp |
+
+**The tripwire is valid.** The concern was unfounded, but it is now *measured* rather than
+assumed, and the threshold is concrete: **> 72 % on condition D means investigate.**
+
+**Why it is safe is itself interesting.** Count is enormously predictive *conditionally* —
+9.0 % of 0-2 pitches are in the zone versus 63.1 % of 3-0 pitches — and yet worth ~0.5 pp
+marginally, because 3-0 is 1.8 % of pitches and the dominant counts are ones where BALL is
+already the right guess. A strong conditional effect can carry near-zero predictive value.
+
+**Plan change:** §7.2 tripwire threshold set to 72 %, with the reasoning recorded.
+
+---
+
+## RT-8 — CRITICAL. The escalation rule does not resolve the blind spot. **Fixed.**
+
+**Challenge.** §14.3 pre-registered: "if |Δ| < 2.5 pp, extend to 5,000 pitches." The blind
+spot was identified at |Δ| ≈ 1–2 pp. Was 5,000 ever checked against it? No.
+
+**Measurement** — McNemar power, 300 replicates, resampling real margins:
+
+| σ (in) | Δ vs umpire | n=1,000 | n=3,000 | **n=5,000** | n=10,000 |
+|---|---|---|---|---|---|
+| 0.75 | +2.0 pp | 0.70 | 1.00 | 1.00 | 1.00 |
+| **1.0** | **+0.85 pp** | 0.16 | 0.38 | **0.66** | 0.91 |
+| **1.5** | **−1.26 pp** | 0.25 | 0.63 | **0.86** | 0.99 |
+
+**The rule was broken.** Escalating to 5,000 lands at 0.66–0.86 power — below the 0.80
+convention, in exactly the band the rule exists to resolve. It would have meant spending 5×
+the acquisition budget to remain unable to answer the question.
+
+**Fix.** Escalation target raised to **10,000 pitches from 500 games** (≥0.91 power across the
+band; ~43 GB of video, which S: absorbs). Additionally, the plan now **leads with the paired
+effect size and its clustered-bootstrap interval**, with McNemar reported alongside — a binary
+significance verdict discards information and is highly sample-size dependent here.
+
+**Plan change:** §14.3 rewritten.
+
+---
+
+## RT-9 — The sampling frame was wrong. **Fixed.**
+
+**Challenge.** §14.4 said "enumerate all 2026 regular-season games (~2,430)." Verified?
+
+**Measurement [2026-09-22]:** 2,458 regular-season games scheduled, spanning 2026-03-25 →
+**2026-09-27**. Status: **2,341 Final** (95.2 %), 87 Scheduled, 27 Postponed, 2 Completed
+Early, 1 In Progress.
+
+**The season is not over.** The pool is 2,341, not ~2,430, and September is incomplete — which
+biases month-stratified sampling if not handled.
+
+**Fix.** Filter on `status.detailedState == "Final"`, re-enumerate at acquisition time rather
+than hardcoding, and either pool March into April or stratify on completed games per month —
+stating which was done and recording the realised distribution.
+
+---
+
+## RT-10 — CRITICAL. Do clips leak the outcome? **Yes. Confirmed by extraction.**
+
+This was open question 2, previously "unverified." It is now closed, in the bad direction.
+
+**Measurement.** Frames extracted from a real clip (Citizens Bank Park):
+
+| Frame | Score bug reads |
+|---|---|
+| 30 (pre-pitch) | `0-0` |
+| **440 (post-pitch)** | **`1-0`** |
+
+The ball/strike outcome is rendered **in plain text, in-frame**. A `FOUR SEAM 97 MPH` banner
+also appears post-pitch. Any vision model given whole clips would learn to read the count
+instead of seeing the ball — and would score extremely well while learning nothing.
+
+**Fix — two mandatory mitigations.** (1) Truncate every clip at plate crossing, which removes
+the count update, the pitch-type banner, the umpire's signal and the catcher's reaction at
+once, and is correct for Part 3 anyway. (2) Mask overlay regions on retained frames. Overlay
+content and position vary by broadcast, so masks are per-broadcast and the audit is
+per-broadcast.
+
+**New dependency:** truncation requires reliably locating the plate-crossing frame. Added as
+open item 3.
+
+---
+
+## RT-11 — CRITICAL. Part 2's precision target is infeasible. **Rescoped.**
+
+**Challenge.** §8.3 asserted "a CV pipeline that recovers location to ±2 inches is a real
+result" without ever checking whether the ball is resolvable or the geometry observable.
+
+**Measurement.** One frame extracted per clip from three ballparks — **three different camera
+angles**:
+
+| Venue | Angle |
+|---|---|
+| Citizens Bank Park | High first-base side, fully side-on |
+| Great American Ball Park | Elevated behind the pitcher, centred |
+| Wrigley Field | Elevated behind the pitcher, offset to third base, tighter |
+
+**(a) No single camera model exists.** Angle, framing and zoom vary by *broadcast*, not just
+venue. A homography fitted at one park will not transfer, and broadcast cameras pan and zoom
+within a clip.
+
+**(b) The worst case is the common one.** Ball/strike depends on `x` and `z`. From a side-on
+view, `x` lies along the camera's **depth axis** — the ~17 inches separating an inside strike
+from an outside ball project to a handful of pixels, confounded with perspective. Meanwhile
+the ball is ~**3 px** across, moving ~**28 px per frame** at 95 mph: a motion-blurred streak,
+not a disc. Recovering `x` to ±2 in from a side-on feed would need sub-pixel precision on the
+worst-observed axis. It is not achievable.
+
+**Fix — Part 2 rescoped before any code is written (§8.4).** Metric reconstruction is
+abandoned. The CV stage emits a *visual state description* — ball track in image space,
+position relative to fixed landmarks, apparent crossing height, explicit uncertainty — not
+field coordinates. The question becomes "does broadcast-visible information carry enough
+signal?" rather than "can we rebuild Statcast from TV." **Target B (the human call) becomes
+Part 2's primary target**, since a human umpire also works from one viewpoint with no metric
+readout. Samples are stratified by broadcast angle, with per-angle reporting.
+
+This makes Part 2 harder and far more honest. Had it gone unexamined, Phase 4 would have been
+built against an unreachable specification.
+
+---
+
 ## Open items — external dependencies, not design flaws
 
 | # | Item | Blocks | Why it cannot be closed now |
 |---|---|---|---|
 | 1 | **Jev API access** — waitlisted; Vercel AI Gateway may be faster | Phase 3 | Vendor-controlled. **Longest lead time in the project — apply before Phase 0.** |
-| 2 | **Video overlay audit** — do clips leak the call via a K-zone graphic, count bug, or visible umpire signal? | Phase 4 | Requires human eyes on ~20 clips. Gated in §8.2 and Milestone 1. |
-| 3 | **Measured Jev latency** from this machine and region | Phase 3 | The 70–500 ms figure is the vendor's claim, not a measurement. |
+| 2 | **Camera-angle census** across 30 venues — how many feeds are side-on? | Phase 4 | Cheap, but needs one clip per venue; folded into Phase 1 acquisition |
+| 3 | **Plate-crossing frame detection** — required by the RT-10 truncation mitigation | Phase 4 | Testable on 20 clips in Milestone 1 |
+| 4 | **Measured Jev latency** from this machine and region | Phase 3 | The 70–500 ms figure is the vendor's claim, not a measurement |
 
 ---
 
-## Convergence
+## Convergence status
 
-Round 1 produced two critical findings (RT-1, RT-2). Round 2 verified both fixes by
-measurement and produced no new findings that changed a decision. RT-3 through RT-6 were
-resolved without altering the design. The remaining three items are external dependencies.
+| Round | New findings | Decision-changing |
+|---|---|---|
+| 1 | RT-1 … RT-6 | 2 (RT-1, RT-2) |
+| 2 | none — verification of round-1 fixes | 0 |
+| 3 | RT-7 … RT-11 | **3 (RT-8, RT-10, RT-11)** |
+| 4 | *pending* | — |
 
-**The plan is considered converged for Phases 0–2.** Phase 3 cannot be finalised until open
-item 1 resolves; Phase 4 cannot until open item 2 does.
+**Not converged.** Round 3 changed three decisions, and the rule is that convergence requires
+a round producing no decision-changing findings. Round 2 did not count, because it verified
+fixes rather than attacking fresh surface — a distinction worth keeping, since round 3 found
+three problems in material round 2 never looked at.
+
+Round 3's findings cluster in Part 2 and in sample sizing — the two areas round 1 barely
+touched. **Round 4 should attack the areas still untested:** the latency measurement
+methodology (how model time is separated from pipeline time when Jev evaluates questions in
+parallel), the Jev state-serialisation format and its token budget, the CV rescope in §8.4
+now that it is concrete, and Supabase schema/limits.
+
+Phases 0–2 are safe to begin: RT-8/10/11 all affect Phase 3 onward, and the Part 0 data
+requirements are unchanged — the video is collected either way.

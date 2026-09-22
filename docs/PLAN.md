@@ -491,10 +491,22 @@ Each condition is a different `state` block handed to Jev for the same pitch.
 | **D** | Context only | Pitch type, velo, movement, count, handedness, pitcher/catcher identity. **No location.** | Floor — what do priors alone buy? Expect ≈ base rate. |
 | **E** | Umpire's view | Everything in A plus everything in D | The realistic setting |
 
-Reading the results: **C ≈ 100 %** confirms the harness works. **D ≈ 69 %** confirms no
-leakage (if D scores well above the base rate, location is leaking through some other
-field — a bug). The interesting quantity is **A vs. C**: the gap is exactly Jev's arithmetic
-deficit, measured rather than assumed.
+Reading the results: **C ≈ 100 %** confirms the harness works. The interesting quantity is
+**A vs. C**: the gap is exactly Jev's arithmetic deficit, measured rather than assumed.
+
+**Condition D is the leakage tripwire, and its threshold is now measured rather than guessed.
+[measured]** A gradient-boosted tree given the full condition-D feature set and thousands of
+training pitches reaches **69.80 %** against a base rate of **69.28 %** — a gain of just
+**+0.5 pp**. So:
+
+> **Tripwire: if Jev scores above ~72 % on condition D, location is leaking through some
+> other field. Investigate before believing any other number.**
+
+The *reason* the tripwire is safe is a statistical lesson worth keeping. Count is enormously
+predictive conditionally — **9.0 %** of 0-2 pitches are in the zone versus **63.1 %** of 3-0
+pitches — yet worth almost nothing marginally, because 3-0 is only 1.8 % of pitches and the
+counts that dominate the sample are ones where BALL is already the right guess. A strong
+conditional effect can carry near-zero predictive value.
 
 Condition **E** is the headline number and is the only one compared against the human umpire.
 
@@ -615,11 +627,22 @@ source backend. A test asserts this.
 
 Two subtler risks:
 
-- **Broadcast overlays.** If clips carry a K-zone graphic, a count/score bug, or a visible
-  umpire signal, the vision model can read the answer instead of seeing the ball.
-  **Status: unverified.** A manual audit of 20 clips is a gate on Phase 4 (§16), recorded as
-  a table in `docs/LOG.md`. If overlays leak, mitigation is to crop or to truncate the clip
-  before the call is signalled.
+- **Broadcast overlays. [measured — CONFIRMED LEAKING]** Frames extracted from a real clip
+  show the score bug reading `0-0` at frame 30 and **`1-0` at frame 440** — the ball/strike
+  outcome rendered in plain text, in-frame. A `FOUR SEAM 97 MPH` banner also appears
+  post-pitch. This is not a hypothetical risk: any model given whole clips would learn to
+  read the count rather than see the ball.
+
+  **Mandatory mitigations, both applied:**
+  1. **Truncate every clip at plate crossing.** Removes the count update, the pitch-type
+     banner, the umpire's signal and the catcher's reaction in one step — and is the right
+     thing for Part 3 later anyway.
+  2. **Mask the overlay regions** on every retained frame. The pre-pitch count is legitimate
+     context, but masking is cheap insurance against mid-clip updates and against
+     broadcast-specific graphics we have not enumerated.
+
+  Overlay content and position **vary by broadcast** (§8.4), so masks are derived per
+  broadcast, not hardcoded once, and the Phase 4 audit is per-broadcast.
 - **Calibration fitted on Statcast.** Mapping pixels to field coordinates needs a camera
   model. Fitting that per-pitch against Statcast coordinates would import the answer.
   **Rule:** calibration is fitted on a *disjoint* calibration set of games and frozen before
@@ -633,6 +656,52 @@ close-call stratum collapses, headline accuracy barely moves. Reporting that tra
 *is* the finding.
 
 Part 2 is explicitly permitted to run on a smaller sample than Part 1 (§14.3).
+
+### 8.4 Camera geometry — the binding constraint on Part 2 **[measured]**
+
+Frames pulled from three clips at three ballparks show **three different camera angles**:
+
+| Venue | Angle | Consequence |
+|---|---|---|
+| Citizens Bank Park | High **first-base side**, fully side-on | Ball crosses the frame left→right |
+| Great American Ball Park | Elevated **behind the pitcher**, centred | Ball travels away from camera |
+| Wrigley Field | Elevated behind the pitcher, offset to third base, tighter framing | Different again |
+
+Two hard consequences.
+
+**(a) There is no single camera model.** Angle, framing and zoom vary by broadcast, not just
+by venue. A homography fitted at one park does not transfer. Calibration must be per
+broadcast — and realistically re-estimated per clip, since broadcast cameras pan and zoom.
+
+**(b) The observable dimension depends on the angle, and the side-on case is the bad one.**
+Ball/strike depends on both `x` (inside/outside) and `z` (height). From the side-on
+Citizens Bank Park view, `x` lies along the camera's **depth axis**: the ~17 inches that
+separate an inside strike from an outside ball project to very few pixels and are confounded
+with perspective. `z` is well observed; `x` is nearly unobservable. From the
+behind-the-pitcher views the situation partly reverses.
+
+Scale of the problem: the ball is roughly **3 px** across, moving ~**28 px per frame** at 95
+mph — a motion-blurred streak, not a disc. Recovering `x` to ±2 inches from a side-on view
+would need sub-pixel precision along the worst-observed axis. **It is not going to happen.**
+
+**Rescope — decided now, before any code is written.**
+
+1. Part 2 does **not** attempt metric reconstruction of `plate_x` / `plate_z` to inch
+   precision. That target is abandoned as infeasible from broadcast video.
+2. The CV stage emits a **visual state description** — ball track in image space, position
+   relative to fixed landmarks (plate, batter's knees and belt, catcher's glove), apparent
+   crossing height, and an explicit uncertainty — rather than field coordinates.
+3. The research question is restated honestly: **does broadcast-visible information carry
+   enough signal for Jev to decide?** Not: can we rebuild Statcast from TV.
+4. **Target B (the human call) becomes Part 2's primary target.** A human umpire also works
+   from a single viewpoint with no metric readout, and §7.5 puts the ceiling near 95 %
+   regardless. Target A is still reported, and is expected to be much worse.
+5. Stratify the Part 2 sample **by broadcast angle** and report per-angle, since (b) predicts
+   side-on feeds will underperform. If that prediction holds, it is a finding, not a failure.
+
+This makes Part 2 harder to do well and much more honest. The `PitchTrajectory` interface in
+§4.2 still holds — the CV backend simply reports wide uncertainty on `x`, which the evaluation
+consumes without special-casing.
 
 ---
 
@@ -1005,17 +1074,41 @@ sizing guide, not a guarantee.
 - **Part 2 video subset: 200 pitches**, stratified to over-sample close calls, because CV
   errors concentrate there and 200 clips ≈ 860 MB is manageable.
 - **Pre-registered escalation rule (fixed now, §11.6):** if the observed |Jev − umpire|
-  accuracy difference on Target A is **under 2.5 pp**, extend to 5,000 pitches from 250 games
-  before drawing any conclusion. Declaring this in advance is what keeps it from being
+  accuracy difference on Target A is **under 2.5 pp**, extend to **10,000 pitches from 500
+  games** before drawing any conclusion. Declaring this in advance is what keeps it from being
   p-hacking.
+
+  **[measured]** The escalation target is 10,000, not 5,000. Measured McNemar power:
+
+  | σ (in) | Δ vs umpire | n=1,000 | n=3,000 | n=5,000 | **n=10,000** |
+  |---|---|---|---|---|---|
+  | 0.75 | +2.0 pp | 0.70 | 1.00 | 1.00 | **1.00** |
+  | 1.0 | +0.85 pp | 0.16 | 0.38 | 0.66 | **0.91** |
+  | 1.5 | −1.26 pp | 0.25 | 0.63 | 0.86 | **0.99** |
+
+  5,000 reaches only 0.66–0.86 power in the band the rule exists to resolve — below the 0.80
+  convention, and it would mean spending 5× the acquisition to remain unable to answer the
+  question. 10,000 pitches implies ~43 GB of video, which the S: drive absorbs comfortably.
+
+- **Lead with the effect size, not the p-value.** The primary reported quantity is the paired
+  accuracy difference with a clustered-bootstrap confidence interval. McNemar is reported
+  alongside, but a binary significant/not-significant verdict throws away the information the
+  interval carries — and, as the table shows, is heavily sample-size dependent in exactly the
+  regime we care about.
 
 ### 14.4 Sampling strategy for v1
 
 Deliberately simple, because complex schemes are hard to reason about and easy to bias:
 
-1. Enumerate all 2026 regular-season games (~2,430).
+1. Enumerate 2026 regular-season games, **filtering `status.detailedState == "Final"`**.
+   **[measured 2026-09-22]** 2,458 games are on the schedule spanning 2026-03-25 → 2026-09-27,
+   of which **2,341 are Final** (95.2 %), 87 still Scheduled, 27 Postponed, 1 In Progress.
+   **The season is not over.** Re-enumerate at acquisition time rather than hardcoding a count.
 2. Draw 100 games by **stratified random sampling on month** (proportional), to spread across
-   the season and avoid a single hot stretch of umpiring.
+   the season and avoid a single hot stretch of umpiring. March (4 days) and September
+   (incomplete) are under-represented by construction — either pool March into April and
+   accept September's partial weight, or stratify on *completed games per month* and state
+   which was done. Record the realised month distribution either way.
 3. Within each game, take all taken pitches and draw 10 by **simple random sample without
    replacement**, seeded.
 4. Do **not** balance classes or over-sample close calls in the main set — the natural
@@ -1110,14 +1203,17 @@ Tracked, not hand-waved. Each blocks a specific phase.
 | # | Question | Blocks | Resolution path |
 |---|---|---|---|
 | 1 | Do we have Jev API access? Waitlisted; Vercel AI Gateway may be faster. | Phase 3 | Apply now; it is the longest lead time in the project |
-| 2 | Do Savant clips contain overlays that leak the call? | Phase 4 | Manual audit of 20 clips (§8.2) |
-| 3 | Do the `api_break_*` fields use feet or inches? | — | Re-derive movement from trajectory; avoid the fields |
-| 4 | Actual Jev latency from this machine/region | Phase 3 | Measure in Phase 3; quoted 70–500 ms is the vendor's |
-| 5 | Video availability season-wide (20/20 in one game) | Phase 1 | Coverage report |
+| 2 | How many distinct broadcast camera angles exist across 30 venues, and which are side-on? | Phase 4 | Classify one clip per venue during Phase 1 acquisition |
+| 3 | Can release and plate-crossing frames be identified reliably enough to truncate clips? | Phase 4 | Required by the §8.2 mitigation; test on 20 clips in Milestone 1 |
+| 4 | Do the `api_break_*` fields use feet or inches? | — | Re-derive movement from trajectory; avoid the fields |
+| 5 | Actual Jev latency from this machine/region | Phase 3 | Measure in Phase 3; quoted 70–500 ms is the vendor's |
+| 6 | Video availability season-wide (20/20 in one game) | Phase 1 | Coverage report |
 
 **Closed during red-team** (see `PLAN_REDTEAM.md`): challenge attribution coverage (RT-1),
 baseline model accuracy (RT-2), season-wide stability (RT-3), `blocked_ball` impact (RT-4),
-environment availability (RT-6).
+environment availability (RT-6), condition-D tripwire threshold (RT-7), escalation sample
+size (RT-8), sampling frame (RT-9), **whether clips leak the outcome — they do** (RT-10),
+camera-angle feasibility for Part 2 (RT-11).
 
 **Question 1 is the critical path.** Apply for access before Phase 0, because nothing in
 Part 1 can be evaluated without it. Phases 0–2 are unblocked and independent of it.
