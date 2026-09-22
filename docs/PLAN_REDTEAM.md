@@ -400,25 +400,172 @@ built against an unreachable specification.
 
 ---
 
+---
+
+# Round 4 — the rescope, the statistics, and the plumbing
+
+Targets the areas round 3 named as untested. Four findings, **one decision-changing** — and
+it is the same area round 3 already forced a rescope in.
+
+Reproduce with `uv run python scripts/redteam_round4_vision.py`,
+`redteam_round4_vision2.py`, and `redteam_round4_data.py`.
+
+---
+
+## RT-17 — CRITICAL. The rescoped Part 2 is still not achievable as written.
+
+**Challenge.** RT-11 rescoped Part 2 from metric reconstruction to "a visual state
+description including a ball track in image space." That is worthless if the ball cannot be
+detected at all. Never tested.
+
+**Attempt 1 — naive frame differencing.** Drowns in crowd motion:
+
+| Clip | Candidates/frame (median) | Longest chained "track" | Horizontal speed |
+|---|---|---|---|
+| Citizens Bank Park | 79 | 26 frames | 0.5 px/frame |
+| Great American | 97 | 26 frames | 1.1 px/frame |
+| Wrigley | 245 | 26 frames | 0.8 px/frame |
+
+A 95 mph ball moves ~**28 px/frame**. These tracks move at 0.5–1.1. They are noise, and with
+~100 candidates per frame a greedy chainer will always find *something*.
+
+**Attempt 2 — a fair classical detector** with the three gates any competent tracker uses:
+an HSV field mask (exclude the stands), a brightness gate (a baseball is white and brighter
+than its surroundings), and a kinematic gate (10–55 px/frame plus a low-curvature
+constant-velocity constraint).
+
+| Clip | Candidates/frame after all gates | Best track speed |
+|---|---|---|
+| Citizens Bank Park | 41 | 1.1 px/frame |
+| Great American | 78 | 0.6 px/frame |
+| Wrigley | 32 | 0.5 px/frame |
+
+**Still fails.** Visual inspection of the annotated output confirms it: the recovered "track"
+sits on the *pitcher's glove during his set*, at frames 3–32, roughly three seconds before
+the pitch is thrown. The field mask also leaked into the stands (69–90 % of frame).
+
+**Conclusion.** Classical motion-based ball detection does not work on broadcast baseball
+video. This is a known-hard problem — published work uses learned detectors and still
+struggles with a 3-px, motion-blurred object against a moving crowd. **The CV stage is not a
+preprocessing step; it is a research project comparable in size to the rest of this study.**
+
+**This is a scope decision, not a technical fix,** and it is escalated to the project owner
+rather than resolved here. The options are recorded in `docs/PLAN.md` §8.5.
+
+---
+
+## RT-12 — Is the ABS zone stable for a batter across games? **Resolved: perfectly.**
+
+**Challenge.** §3.1 verified the zone is constant *within* a game. The plan treats it as
+height-derived and therefore fixed, but never checked across games. If MLB re-measures
+players, or the operator can nudge it, that assumption breaks.
+
+**Measurement** — 407 batters appearing in ≥2 games:
+
+| | |
+|---|---|
+| Identical `sz_top` in every game | **407 / 407 (100.0 %)** |
+| Spread, median / p90 / max | **0.000 / 0.000 / 0.000 inches** |
+
+Exactly stable. The zone is a per-batter constant for the season.
+
+**Plan change:** zone can be cached per `batter_id` rather than stored per pitch, and a new
+quality gate asserts zero within-season drift — which would catch a re-measurement or a data
+vendor change immediately.
+
+---
+
+## RT-15 — What is the realistic data-loss budget? **Resolved: 0.24 %.**
+
+**Challenge.** The pipeline assumed complete data. Measured on 11,950 taken pitches:
+
+Every tracking field (`plate_x`, `plate_z`, `sz_top`, `sz_bot`, `vx0`, `ax`,
+`release_pos_y`, `release_speed`, `pitch_type`) is missing on exactly the **same 29 pitches
+(0.24 %)** — whole-pitch tracking failures, not per-field gaps. **99.76 % usable.**
+
+**Plan change:** §12.4 gains a gate — usable fraction must exceed 99.5 %, and the missing set
+must be all-or-nothing per pitch. A drift toward per-field gaps would signal a parsing bug.
+
+---
+
+## RT-16 — Should the bootstrap cluster by game or by umpire? **Resolved, with a caveat.**
+
+**Challenge.** §11.3 clusters by game. But umpires rotate across games and umpire skill may
+vary, so the true correlated unit might be the umpire.
+
+**Measurement** — 11,921 pitches, 79 games, 61 distinct home-plate umpires:
+
+| | |
+|---|---|
+| Umpire accuracy range | 87.33 % – 98.15 % (sd **1.93 pp**) |
+| sd expected from sampling noise alone | 1.60 pp |
+| Verdict | consistent with noise (ratio 1.21) |
+| Games per umpire *in this sample* | mean 1.3, max 2 |
+| 95 % CI clustered by **game** | [94.23, 95.14] — width **0.90 pp** |
+| 95 % CI clustered by **umpire** | [94.22, 95.13] — width **0.91 pp** |
+
+Identical. Clustering by game is fine.
+
+**But the reason matters, and it does not generalise.** With ~76 MLB umpires and a 79-game
+sample, each umpire appears ~1.3 times — so game and umpire are very nearly the *same*
+partition. At the 500-game escalation size (RT-8) each umpire would appear ~6–7 times and the
+two units would genuinely diverge.
+
+**Plan change:** cluster by game at n ≈ 100 games; **switch to clustering by umpire at the
+500-game escalation**, where between-umpire variation also becomes separately measurable
+(and is a worthwhile secondary analysis in its own right).
+
+---
+
+## RT-18 / RT-19 / RT-20 — plumbing, resolved by design rather than measurement
+
+**RT-18 — latency attribution is impossible in multi-question requests.** Jev evaluates all
+questions in a request in parallel, and TypeSafe notes that adding questions "barely changes
+the response time." So a request asking `Choice` + `Noul` + `Score` returns **one** latency
+covering all three, which cannot be attributed. Compounding this, what a client can measure
+is API round-trip time, which includes network — true inference time is unobservable from
+outside.
+
+**Design fix, into §10.5:** two separate runs. A **latency run** — single question, serial,
+no concurrency, with a trivial-request baseline to estimate the network floor. And a
+**bulk accuracy run** — multi-question, concurrent, latency not reported from it. Never mix
+them. Report the measurement as *client-observed API latency* and state the network
+component, rather than implying it is model inference time.
+
+**RT-19 — state size and cost are non-constraints.** A condition-E pitch record is ~20 fields
+of JSON, on the order of 150 tokens, against a documented 32k state limit — about 0.5 %.
+Cost at $0.042/MTok: the full escalated design (10,000 pitches × 5 conditions) is roughly
+7.5 M input tokens ≈ **$0.32**. The binding constraint is the 1,200 req/min rate limit:
+50,000 requests take ≥42 minutes of wall clock. Neither changes any decision; both go into
+§13 so they are not re-litigated.
+
+**RT-20 — Supabase free tier.** 500 MB database against ~74,000 rows at ~1 KB is comfortable.
+The real gotcha is that **free-tier projects pause after 7 days of inactivity** — a research
+project that sits idle between phases will find its dataset offline. Mitigation: local
+Parquet on `S:` remains the working copy of record (already the plan), and Supabase is treated
+as a publishing target that can be repopulated from Parquet at any time.
+
+---
+
 ## Convergence status
 
 | Round | New findings | Decision-changing |
 |---|---|---|
 | 1 | RT-1 … RT-6 | 2 (RT-1, RT-2) |
 | 2 | none — verification of round-1 fixes | 0 |
-| 3 | RT-7 … RT-11 | **3 (RT-8, RT-10, RT-11)** |
-| 4 | *pending* | — |
+| 3 | RT-7 … RT-11 | 3 (RT-8, RT-10, RT-11) |
+| 4 | RT-12, RT-15 … RT-20 | **1 (RT-17)** |
 
-**Not converged.** Round 3 changed three decisions, and the rule is that convergence requires
-a round producing no decision-changing findings. Round 2 did not count, because it verified
-fixes rather than attacking fresh surface — a distinction worth keeping, since round 3 found
-three problems in material round 2 never looked at.
+**Converged for Phases 0–2. Not converged for Part 2.**
 
-Round 3's findings cluster in Part 2 and in sample sizing — the two areas round 1 barely
-touched. **Round 4 should attack the areas still untested:** the latency measurement
-methodology (how model time is separated from pipeline time when Jev evaluates questions in
-parallel), the Jev state-serialisation format and its token budget, the CV rescope in §8.4
-now that it is concrete, and Supabase schema/limits.
+The trend is the right shape: 2 → 0 → 3 → 1 decision-changing findings, and round 4's single
+finding is a deeper cut into the *same* area round 3 flagged, not a new surface. Rounds 3 and
+4 between them found nothing wrong with Part 0 or Part 1 — every check there (RT-7, RT-12,
+RT-15, RT-16) confirmed the design or tightened a threshold.
 
-Phases 0–2 are safe to begin: RT-8/10/11 all affect Phase 3 onward, and the Part 0 data
-requirements are unchanged — the video is collected either way.
+Part 2 has now failed two successive rounds. That is a signal about the sub-project, not
+about the review: broadcast-video ball tracking is genuinely hard, and two rounds of
+rescoping have not made it tractable. **It needs a scope decision from the project owner
+(§8.5), not a third rescope.**
+
+Phases 0–2 are cleared to begin.

@@ -703,6 +703,34 @@ This makes Part 2 harder to do well and much more honest. The `PitchTrajectory` 
 §4.2 still holds — the CV backend simply reports wide uncertainty on `x`, which the evaluation
 consumes without special-casing.
 
+### 8.5 Part 2 is blocked on a scope decision **[measured]**
+
+The §8.4 rescope assumed a ball track in image space was obtainable. **It is not, by
+classical means.** Two detector attempts on three clips:
+
+| Approach | Candidates/frame | Best track | Expected for a 95 mph ball |
+|---|---|---|---|
+| Naive frame differencing | 79–245 | 0.5–1.1 px/frame | **~28 px/frame** |
+| + field mask, brightness gate, kinematic gate | 32–78 | 0.5–1.1 px/frame | ~28 px/frame |
+
+Both fail. Visual inspection shows the recovered "track" sitting on the pitcher's glove
+during his set, three seconds before the pitch. The ball is ~3 px across, smeared over ~28 px
+by motion blur, against a continuously moving crowd.
+
+**The CV stage is not a preprocessing step — it is a research project comparable in size to
+the rest of this study.** Four honest ways forward:
+
+| Option | What it is | Cost | Risk |
+|---|---|---|---|
+| **A. Defer** | Move Part 2 to future work alongside Part 3. v1 = Part 0 + Part 1, done thoroughly. | Lowest | Loses the vision angle entirely |
+| **B. Learned detector** | Fine-tune a small object detector on hand-labelled baseballs. | Weeks; needs labelling | Could still fail on side-on feeds (§8.4b) |
+| **C. VLM description** | Frames → a vision-language model → text description → Jev. Sidesteps tracking. | Low | Adds an uncontrolled component; the VLM may be doing the real work |
+| **D. Catcher-glove proxy** | Track the glove at the catch — a large, high-contrast, slow object — as a location proxy. | Low | Glove ≠ pitch location; framing is the confound. But that is arguably interesting in its own right |
+
+**This plan does not choose.** It is a scope decision for the project owner, and Part 2 stays
+blocked until it is made. Part 0 is unaffected — video is collected regardless, and every
+option above consumes the same clips.
+
 ---
 
 ## 9. Part 3 — deferred, but constrained now
@@ -783,6 +811,20 @@ Three separate clocks, never summed into one number:
 - **Pipeline latency** — state construction and parsing.
 - **End-to-end latency** — everything from `PitchRecord` in hand to decision out.
 
+> **Two separate runs, and they must not be mixed.** Jev evaluates every question in a
+> request **in parallel**, and TypeSafe notes that adding questions "barely changes the
+> response time" — so a request asking `Choice` + `Noul` + `Score` returns **one** latency
+> covering all three, which cannot be attributed to any of them.
+>
+> - **Latency run:** one question per request, strictly serial, no concurrency, plus a
+>   trivial-request baseline to estimate the network floor.
+> - **Bulk accuracy run:** multiple questions per request, concurrent. Latency from this run
+>   is never reported.
+>
+> Report the result as **client-observed API latency**, stating the network component
+> separately. True model inference time is not observable from outside the API, and claiming
+> otherwise would overstate what was measured.
+
 Reported as mean, median, **P90, P95, P99**, and max. Tail latency is what matters for a
 real-time claim; the mean hides it. Recorded alongside: batch size, concurrency, retry count,
 and wall-clock time of day. Network conditions are a confounder and are logged, not
@@ -828,6 +870,17 @@ Two mitigations:
 - **Clustered bootstrap.** Resample **whole games** with replacement, then pitches within
   them, and recompute the metric 2,000 times. The 2.5th and 97.5th percentiles give the 95 %
   interval. This propagates the real dependence structure instead of assuming it away.
+
+  **[measured]** Game and umpire are equivalent clustering units *at v1 scale*: with 79 games
+  and 61 distinct home-plate umpires, each umpire appears ~1.3 times, so the two partitions
+  nearly coincide (CI widths 0.90 pp vs 0.91 pp). Between-umpire accuracy variation — range
+  87.3 %–98.2 %, sd 1.93 pp against 1.60 pp expected from sampling noise — is consistent with
+  noise at this sample size.
+
+  **This does not generalise.** At the 500-game escalation each umpire appears ~6–7 times and
+  the units genuinely diverge. **Switch to clustering by umpire at escalation**, where
+  between-umpire variation also becomes separately measurable and is worth a secondary
+  analysis.
 - **Group-aware splits** for any fitted baseline: split by `game_pk`, never by pitch, so no
   game appears in both train and test.
 
@@ -914,7 +967,15 @@ Acquisition fails loudly rather than silently producing a subtly wrong dataset:
    is what lets this gate detect a broken fallback rather than a merely diluted average.
 4. Taken-pitch fraction must be 50–54 %.
 5. Class balance must be 66–72 % BALL.
-6. Any row failing a gate goes to `data/quarantine/` with the failing check named.
+6. **Usable fraction > 99.5 %**, and missing tracking data must be **all-or-nothing per
+   pitch**. **[measured]** 0.24 % of taken pitches are missing every tracking field together
+   — whole-pitch tracking failures. A drift toward per-field gaps signals a parsing bug, not
+   a data problem.
+7. **`sz_top`/`sz_bot` must show zero within-season drift per batter. [measured]** 407/407
+   batters appearing in ≥2 games had identical zones, spread 0.000 in. The zone is a
+   per-batter season constant, so it is cached by `batter_id`; any drift means MLB
+   re-measured a player or the vendor changed something, and must be investigated before use.
+8. Any row failing a gate goes to `data/quarantine/` with the failing check named.
 
 These are not decorative — gates 1 and 3 are exactly the checks that caught the two real bugs
 described in §3.1 and §6.4.
@@ -1004,12 +1065,26 @@ wrong choice here: the dataset lives on `S:\`, which WSL reaches over the 9P bri
 `/mnt/s` — slow for exactly this workload (thousands of small MP4 writes and Parquet reads).
 Every dependency has a native Windows build.
 
+### 13.1b Cost and rate limits **[not a constraint]**
+
+A condition-E state block is ~20 JSON fields, on the order of **150 tokens**, against a
+documented **32k state limit** — about 0.5 %. At $0.042/MTok input with free output, the full
+escalated design (10,000 pitches × 5 conditions ≈ 7.5 M tokens) costs roughly **$0.32**.
+
+The binding constraint is the **1,200 requests/minute** rate limit: 50,000 requests take ≥42
+minutes of wall clock. Budget for it; do not design around cost.
+
 ### 13.2 Supabase's role
 
 Supabase holds the **processed** `PitchRecord` table and experiment results — the shareable,
 queryable dataset of record. It does **not** hold video (size, licensing) or raw payloads
 (bulk redistribution). Local Parquet on S: stays the working copy; Supabase is the published
 artifact and the thing a future dashboard reads.
+
+Sizing: ~74,000 rows at ~1 KB against a 500 MB free-tier database is comfortable. The real
+gotcha is that **free-tier projects pause after 7 days of inactivity**, and this project will
+sit idle between phases. That is survivable precisely because Parquet on `S:` is the working
+copy of record — Supabase can be repopulated from it at any time and is never the only copy.
 
 ### 13.3 Determinism
 
