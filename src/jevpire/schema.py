@@ -216,6 +216,15 @@ class PitchRecord(BaseModel):
     game_pk: int
     at_bat_number: int
     pitch_number: int
+    savant_pitch_number: int | None = None
+    """Savant's numbering, which differs from StatsAPI's.
+
+    Savant counts `no_pitch` events (pitch-timer violations, automatic balls) in
+    `pitch_number`; StatsAPI does not. In an at-bat containing one, every subsequent pitch
+    is offset by one. Joining the two sources on StatsAPI's number silently pairs the wrong
+    pitches, so the Savant-side number is carried explicitly.
+    """
+
     play_id: str | None = None
     game_date: date
 
