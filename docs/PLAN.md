@@ -48,13 +48,24 @@ demonstration that Jev wins.
 
 ### 1.1 Scope of this version
 
-**In scope now:** Part 0 (dataset), Part 1 (structured data → Jev), Part 2 (video → CV →
-Jev).
+**In scope now:** Part 0 (dataset) and Part 1 (structured data → Jev).
 
-**Deferred:** Part 3 (pre-emptive prediction) and richer outcome classes. The dataset built in
-Part 0 must nonetheless capture everything Part 3 will need — video, trajectory parameters,
-frame-rate-resolved timing — because re-acquiring data later is expensive and introduces
-version skew.
+**Deferred:** Part 2 (video → CV → Jev), Part 3 (pre-emptive prediction), and richer outcome
+classes.
+
+Part 2 was deferred on 2026-09-22 after failing two red-team rounds — broadcast-video ball
+tracking proved to be a research project in its own right rather than a preprocessing step
+(§8.5). The decision is recorded rather than quietly dropped, and §8 is kept intact because
+its findings are the evidence for the decision and the starting point whenever it resumes.
+
+**The dataset built in Part 0 still captures everything Parts 2 and 3 will need** — video,
+trajectory parameters, frame-rate-resolved timing. Re-acquiring later is expensive and
+introduces version skew, and every deferred option consumes the same clips. Collecting now
+costs one pass; not collecting costs the whole pass again.
+
+**v1 is therefore a complete study in its own right:** a dataset, and a three-way evaluation
+of Jev on accuracy, calibration and latency against a human baseline and real model
+baselines. Parts 2 and 3 become Future Work in the write-up.
 
 ### 1.2 The non-negotiable principle
 
@@ -81,12 +92,10 @@ Primary, in priority order:
 - **RQ4 — Information sufficiency.** How does accuracy degrade as we withhold information —
   from exact coordinates, to relative geometry, to context only? This tells us whether Jev is
   *reasoning about location* or *pattern-matching on priors*.
-- **RQ5 — Vision.** Can a computer-vision model recover enough pitch geometry from broadcast
-  video to support the same decision, and how much accuracy is lost versus Statcast-derived
-  geometry?
-
 Deferred:
 
+- **RQ5 — Vision.** Can a computer-vision model recover enough pitch geometry from broadcast
+  video to support the same decision? (Part 2 — deferred, §8.5.)
 - **RQ6 — Earliness.** How early in the flight can a correct decision be made? (Part 3.)
 
 ### 2.1 Two distinct targets, never conflated
@@ -582,7 +591,11 @@ model latency; end-to-end latency; state token count; `PROMPT_VERSION`; conditio
 
 ---
 
-## 8. Part 2 — video → CV → Jev
+## 8. Part 2 — video → CV → Jev  *(DEFERRED — see §8.5)*
+
+> **Status: deferred 2026-09-22.** Not built in v1. This section is kept in full because its
+> findings are the evidence behind the deferral and the starting point when it resumes.
+> Nothing here blocks Part 0 or Part 1.
 
 ### 8.1 Why the architecture is forced
 
@@ -727,9 +740,13 @@ the rest of this study.** Four honest ways forward:
 | **C. VLM description** | Frames → a vision-language model → text description → Jev. Sidesteps tracking. | Low | Adds an uncontrolled component; the VLM may be doing the real work |
 | **D. Catcher-glove proxy** | Track the glove at the catch — a large, high-contrast, slow object — as a location proxy. | Low | Glove ≠ pitch location; framing is the confound. But that is arguably interesting in its own right |
 
-**This plan does not choose.** It is a scope decision for the project owner, and Part 2 stays
-blocked until it is made. Part 0 is unaffected — video is collected regardless, and every
-option above consumes the same clips.
+**Decision — 2026-09-22: option A, defer.** v1 is Part 0 + Part 1, done thoroughly. Video is
+still collected in Part 0, so whichever option is chosen later starts with the data already
+in hand. Parts 2 and 3 become Future Work in the write-up.
+
+Recorded rather than dropped: the reason Part 2 is not in v1 is a measured infeasibility, not
+a loss of interest, and the article should say so. "We tried and here is exactly where it
+broke" is a more useful contribution than silence.
 
 ---
 
@@ -1204,10 +1221,9 @@ cost, and it is corrected for by reporting the strata separately.
 | **0. Foundations** | Repo skeleton, `schema.py`, `groundtruth.py`, tests, `ffmpeg` installed | Ground-truth function reproduces 123/123 challenge rulings in CI |
 | **1. Acquisition** | `sources/`, quality gates, 100-game pull, Parquet + Supabase | All six gates in §12.4 pass; coverage report written |
 | **2. Milestone 1** | 10 games end-to-end, manually verified | See §17 |
-| **3. Part 1** | Conditions A–E × targets A/B, baselines, full evaluation | Condition C ≈ 100 %, condition D ≈ base rate |
-| **4. Part 2** | Overlay audit, CV pipeline, 200-pitch video run | Overlay audit clean or mitigated; module-boundary test passes |
-| **5. Write-up** | `METHODOLOGY.md`, results, figures, article draft | Every number traceable to a committed results file |
-| **—** | *(deferred)* Part 3, richer outcomes, live system | |
+| **3. Part 1** | Conditions A–E × targets A/B, baselines, full evaluation | Condition C ≈ 100 %, condition D ≤ 72 % |
+| **4. Write-up** | `METHODOLOGY.md`, results, figures, article draft | Every number traceable to a committed results file |
+| **—** | *(deferred)* Part 2 (§8.5), Part 3, richer outcomes, live system | |
 
 ---
 
@@ -1216,7 +1232,8 @@ cost, and it is corrected for by reporting the strata separately.
 Explicitly out of scope. Building these early is the main way this project becomes a weekend
 code dump instead of a study.
 
-- Part 3 in any form.
+- Part 2 or Part 3 in any form. **Collecting the video is in scope; using it is not.**
+- Any CV work — ball detection, camera calibration, frame truncation, overlay masking.
 - Outcome classes beyond BALL/STRIKE.
 - A web dashboard or live demo.
 - A trained ball/strike model of our own beyond the simple §7.5 baselines.
@@ -1244,12 +1261,9 @@ clustered-bootstrap CI; baselines reported alongside; calibration diagram and EC
 latency percentiles reported; the pre-registered test family run with Holm correction.
 **Success is a defensible number, not a favourable one.**
 
-**Phase 4** — overlay audit documented; CV pipeline produces `PitchTrajectory` with reported
-error vs. Statcast in inches; Part 1 vs Part 2 accuracy compared on the same pitches with the
-same prompt.
-
-**Phase 5** — a reader can reproduce every figure from the repo plus Supabase. Limitations
-section explicitly states what the study does *not* show.
+**Phase 4 (write-up)** — a reader can reproduce every figure from the repo plus Supabase. The
+limitations section explicitly states what the study does *not* show, and Future Work states
+why Part 2 was deferred with the measurements that forced it.
 
 ---
 
@@ -1277,12 +1291,16 @@ Tracked, not hand-waved. Each blocks a specific phase.
 
 | # | Question | Blocks | Resolution path |
 |---|---|---|---|
-| 1 | Do we have Jev API access? Waitlisted; Vercel AI Gateway may be faster. | Phase 3 | Apply now; it is the longest lead time in the project |
-| 2 | How many distinct broadcast camera angles exist across 30 venues, and which are side-on? | Phase 4 | Classify one clip per venue during Phase 1 acquisition |
-| 3 | Can release and plate-crossing frames be identified reliably enough to truncate clips? | Phase 4 | Required by the §8.2 mitigation; test on 20 clips in Milestone 1 |
+| 1 | **Do we have Jev API access?** Waitlisted; Vercel AI Gateway may be faster. | **Phase 3** | Apply now; it is the longest lead time in the project |
+| 2 | Actual Jev latency from this machine/region | Phase 3 | Measure in Phase 3; quoted 70–500 ms is the vendor's |
+| 3 | Video availability season-wide (20/20 in one game) | Phase 1 | Coverage report |
 | 4 | Do the `api_break_*` fields use feet or inches? | — | Re-derive movement from trajectory; avoid the fields |
-| 5 | Actual Jev latency from this machine/region | Phase 3 | Measure in Phase 3; quoted 70–500 ms is the vendor's |
-| 6 | Video availability season-wide (20/20 in one game) | Phase 1 | Coverage report |
+
+**Deferred with Part 2** (§8.5), not blocking v1: the camera-angle census across 30 venues,
+and whether release and plate-crossing frames can be identified reliably enough to truncate
+clips per the §8.2 leakage mitigation.
+
+**With Part 2 deferred, open item 1 is the only thing standing between v1 and a result.**
 
 **Closed during red-team** (see `PLAN_REDTEAM.md`): challenge attribution coverage (RT-1),
 baseline model accuracy (RT-2), season-wide stability (RT-3), `blocked_ball` impact (RT-4),
@@ -1318,13 +1336,14 @@ Small, verifiable, and a hard gate. **Do not proceed to Phase 3 until every item
 - [ ] Every ABS challenge in the 10 games is found, `reviewType == "MJ"`, challenger recorded
 - [ ] Geometric rule agrees with reconstructed `abs_call` on 100 % of those challenges
 - [ ] Video downloaded for > 95 % of pitches; failures logged with reasons
-- [ ] **Manual inspection of 10 clips**, written up in `docs/LOG.md`: does the clip show the
-      pitch from release to plate? Is there a K-zone overlay, count/score bug, or visible
-      umpire call? Can release and plate-crossing frames be identified by eye?
+- [ ] **Spot-check 10 clips by eye**: each one shows the pitch it claims to, from windup
+      through the catch. Enough to confirm the `play_id` → clip mapping is correct; no CV
+      analysis, and no overlay audit — that belongs to the deferred Part 2.
 - [ ] Round-trip: `PitchRecord` → Parquet → `PitchRecord` is lossless
 - [ ] Ten pitches spot-checked by hand against the Savant web page
 
 **Explicitly not in Milestone 1:** any Jev call, any CV, any metric beyond the gates.
 
-The manual clip inspection is the highest-value item. It is the only way to resolve open
-question 2, and it determines whether Part 2 is straightforward or needs mitigation.
+The highest-value items are the two cross-source checks — location agreement and the
+challenge-set agreement. Those are the two that caught real bugs during the red-team, and
+they are what makes the dataset trustworthy enough to build on.

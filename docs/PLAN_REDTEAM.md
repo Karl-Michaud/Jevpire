@@ -556,16 +556,38 @@ as a publishing target that can be repopulated from Parquet at any time.
 | 3 | RT-7 … RT-11 | 3 (RT-8, RT-10, RT-11) |
 | 4 | RT-12, RT-15 … RT-20 | **1 (RT-17)** |
 
-**Converged for Phases 0–2. Not converged for Part 2.**
+**CONVERGED.** Part 2 was deferred by owner decision on 2026-09-22 (§8.5, option A),
+which resolves round 4's only decision-changing finding. With Part 2 out of v1 scope, no
+open finding changes a decision in the remaining design.
 
 The trend is the right shape: 2 → 0 → 3 → 1 decision-changing findings, and round 4's single
 finding is a deeper cut into the *same* area round 3 flagged, not a new surface. Rounds 3 and
 4 between them found nothing wrong with Part 0 or Part 1 — every check there (RT-7, RT-12,
 RT-15, RT-16) confirmed the design or tightened a threshold.
 
-Part 2 has now failed two successive rounds. That is a signal about the sub-project, not
-about the review: broadcast-video ball tracking is genuinely hard, and two rounds of
-rescoping have not made it tractable. **It needs a scope decision from the project owner
-(§8.5), not a third rescope.**
+Part 2 failed two successive rounds. That was a signal about the sub-project, not about the
+review: broadcast-video ball tracking is genuinely hard, and two rounds of rescoping did not
+make it tractable. Rather than attempt a third rescope, it was escalated as a scope decision
+and **deferred** — v1 is Part 0 + Part 1, video is still collected, and Part 2 resumes later
+from a dataset that already exists.
 
-Phases 0–2 are cleared to begin.
+**Phases 0–2 are cleared to begin. The plan is converged for everything in v1 scope.**
+
+### What the review actually bought
+
+Six findings that would have corrupted or wasted the study, none of which were visible from
+reading the plan:
+
+| Finding | What it would have cost |
+|---|---|
+| RT-1 | A headline validation computed on 48.5 % of the evidence, presented as complete |
+| RT-2 | Jev benchmarked against a baseline that scores exactly the majority-class rate |
+| RT-8 | A 5× acquisition escalation into a still-underpowered sample |
+| RT-10 | A vision model that reads the count off the scoreboard and appears to work |
+| RT-11, RT-17 | Phase 4 built against a specification that cannot be met |
+
+Two patterns worth carrying into the next project. **Assumptions labelled `[assumed]` were
+reasoned from as if settled** — RT-2 and RT-8 were both flagged in the plan's own notation and
+still went unchecked for a full round. And **the findings that mattered most came from opening
+the artefact rather than reasoning about it** — RT-10 and RT-11 were both invisible until
+frames were actually extracted and looked at.

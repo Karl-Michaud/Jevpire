@@ -6,8 +6,13 @@ Can [Jev](https://typesafe.ai) — TypeSafe AI's "System One" decision model —
 strikes? And if it can, is it *honest* about when it isn't sure, and is it fast enough to
 matter?
 
-> **Status:** planning complete and red-teamed. No experiments run yet.
+> **Status:** planning complete. Four red-team rounds, converged. No experiments run yet.
 > Start with [`docs/PLAN.md`](docs/PLAN.md).
+>
+> **v1 scope:** build the dataset, then evaluate Jev on structured pitch data for accuracy,
+> calibration and latency. The video and pre-emptive-prediction experiments are deferred —
+> broadcast-video ball tracking turned out to be a research project in its own right
+> ([why](docs/PLAN_REDTEAM.md)).
 
 ---
 
@@ -36,9 +41,10 @@ The project is not trying to make Jev win. `Human > Jev` is a publishable result
 2. **Calibration** — when Jev says 80 %, is it right 80 % of the time?
 3. **Latency** — the full distribution, not the mean.
 4. **Information sufficiency** — how does accuracy degrade as information is withheld?
-5. **Vision** — can a CV model recover enough geometry from broadcast video to do the same job?
 
-Deferred: **how early** in the flight a correct call can be made.
+**Deferred to future work:** whether a CV model can recover enough geometry from broadcast
+video to do the same job, and **how early** in the flight a correct call can be made. Video is
+still collected now so both can resume from an existing dataset.
 
 ---
 

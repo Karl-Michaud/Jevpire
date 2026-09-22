@@ -86,5 +86,47 @@ immediately.
 (blocks Phase 3, longest lead time — apply first), video overlay audit (blocks Phase 4),
 measured Jev latency.
 
-**Next step.** Phase 1 — the acquisition pipeline, gathering everything every experiment will
-need, including video.
+**Next step.** Round 3 — a fresh sweep, since round 2 verified fixes rather than attacking
+new surface.
+
+---
+
+## 2026-09-22 — Red-team rounds 3 and 4; Part 2 deferred; plan converged
+
+**Question.** Does the revised plan survive a fresh attack on material rounds 1–2 never
+touched?
+
+**Round 3 — five findings, three decision-changing.**
+- **RT-8:** the pre-registered escalation target of 5,000 pitches reaches only 0.66–0.86
+  McNemar power in the 1–2 pp band it exists to resolve. Raised to 10,000; the plan now leads
+  with the paired effect size and its interval rather than a binary significance verdict.
+- **RT-10:** extracted frames and found the clips leak the outcome — the score bug reads
+  `0-0` at frame 30 and `1-0` at frame 440. The call, in plain text, in frame.
+- **RT-11:** three clips from three ballparks show three different camera angles. On side-on
+  feeds `plate_x` lies along the camera depth axis. The ±2-inch target was abandoned.
+- RT-7 validated the condition-D tripwire (threshold set at 72 %); RT-9 found the season is
+  not over (2,341 of 2,458 games Final).
+
+**Round 4 — four findings, one decision-changing.**
+- **RT-17:** tested the RT-11 rescope and it fails too. Naive frame differencing gives 79–245
+  candidates/frame; a proper detector with field mask, brightness and kinematic gates still
+  gives 32–78, and the recovered "track" sits on the pitcher's glove three seconds before the
+  pitch. Classical ball tracking does not work on broadcast video.
+- RT-12: the ABS zone is *perfectly* stable per batter across games — 407/407, 0.000 in.
+- RT-15: data loss is 0.24 %, all-or-nothing per pitch.
+- RT-16: game and umpire clustering are equivalent at v1 scale but diverge at 500 games.
+
+**Decision.** **Part 2 deferred** (option A of §8.5). v1 = Part 0 + Part 1. Video is still
+collected, so Part 2 resumes later from an existing dataset. This resolves round 4's only
+decision-changing finding, and the plan is **converged**.
+
+**Observations.** Decision-changing findings went 2 → 0 → 3 → 1. Round 2 didn't count — it
+verified fixes rather than attacking fresh surface, and round 3 then found three problems in
+material round 2 never examined. Two patterns worth keeping: assumptions the plan itself
+labelled `[assumed]` were reasoned from as if settled (RT-2, RT-8), and the findings that
+mattered most came from *opening the artefact* rather than reasoning about it (RT-10, RT-11
+were invisible until frames were extracted and looked at).
+
+**Next step.** Phase 0 → Phase 1: the acquisition pipeline, gathering everything every
+experiment will need, video included. **In parallel: apply for Jev API access** — it is
+waitlisted and now the only open item between v1 and a result.
