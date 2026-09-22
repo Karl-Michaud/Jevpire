@@ -1,0 +1,69 @@
+Continue the Jevpire project. Work in S:\Jevpire on the branch feat/full-season-acquisition (already created and pushed).
+
+## What this project is
+
+Jevpire evaluates whether Jev — TypeSafe AI's "System One" decision model, released 2026-09-15 — can call baseball balls and strikes. Jev is NOT an LLM: it takes a JSON/text state block plus typed questions and returns typed values with calibrated probabilities and confidence, no generated text. Its three headline claims are accuracy, calibration (trained via "RLCD"), and 70–500 ms latency. A pitch is in flight for 390–450 ms, so all three are testable at once.
+
+Read docs/PLAN.md first — it is the single source of truth and everything derives from it. Then docs/PLAN_REDTEAM.md (four red-team rounds, converged), docs/DATA_DICTIONARY.md (the 2026 data, verified against live APIs), and docs/LOG.md.
+
+## Current state
+
+Converged plan, Phases 0–1 complete and merged to main:
+- src/jevpire/schema.py — PitchTrajectory, StrikeZone, PitchRecord, Call
+- src/jevpire/groundtruth.py — the ABS zone rule, umpire-call reconstruction, challenge attribution
+- src/jevpire/sources/ — statsapi (primary), savant (cross-check), video, base (cached/throttled fetcher)
+- src/jevpire/quality.py — six acquisition gates
+- src/jevpire/storage.py, cli.py
+- tests/ — 34 tests, all passing, including a fixture of 164 real ABS rulings
+
+Milestone 1 passed on 10 games: 2,914 pitches, 52.7% taken, 68.3% BALL, umpire-vs-rule 94.85%, 10/10 rule-vs-ABS agreement, cross-source location agreement 100.0000% (max error 0.0000 ft), Parquet round-trip lossless.
+
+v1 scope is Part 0 (dataset) + Part 1 (structured data → Jev). Part 2 (video→CV→Jev) and Part 3 (pre-emptive prediction) are DEFERRED — broadcast-video ball tracking failed two red-team rounds and is a research project in its own right. Video is still collected because all deferred options consume the same clips.
+
+## Your task
+
+Implement docs/tasks/01-full-season-acquisition.md. Read it in full before writing code. Summary:
+
+Acquire the complete 2026 season — the only usable season, because 2026 silently redefined plate_x/plate_z (front→middle of plate) and sz_top/sz_bot (operator estimate→height-derived ABS zone). Mixing seasons would produce a confidently wrong result.
+
+Five pieces:
+1. Resumable season acquisition (~2,342 Final games, ~682k pitches, ~96 MB parquet, ~62 min). Shard per game, manifest for resume, never hold the season in memory.
+2. Quality gates at season scale via a Polars path; must produce identical output to the record-based path on the 10-game sample (add a test).
+3. Seeded sampling → eval_1000 (1,000 pitches / 100 games), dev_200 (200 / 20 SEPARATE games, prompt development only), challenges (~2,900). Disjoint by game_pk, enforced by a test. Stratify on month proportional to completed games per month. Report the realised distribution; do not tune it.
+4. Regenerate the ground-truth fixture at ~2,900 rulings (currently 164, an 18× strengthening). Existing tests should pass unchanged. If agreement drops below 100%, that is a finding — investigate before adjusting anything.
+5. Season-scale video downloader: concurrent (default 6), resumable across sessions via a manifest, disk-guarded (stop at 100 GB free), priority-ordered (challenges → eval_1000 → dev_200 → remaining taken → everything else). Full season is ~2.9 TB and 1.5–6 days depending on bandwidth; S: has 3,722 GB free. The user has explicitly decided to pull the whole season. The priority head gates the task; the remainder runs on afterwards and does not block.
+
+## Non-negotiable gotchas (each one already cost a bug)
+
+- NEVER read plate_x/plate_z/pX/pZ directly. Re-derive location from the nine trajectory parameters at an explicitly named plane. StatsAPI is front-of-plate, Savant is middle-of-plate; they differ by up to 1.2 inches.
+- Trajectory coefficients are anchored at y=50 ft, NOT the release point. Release is at negative t. Savant gives the release point, so use PitchTrajectory.from_release_anchored.
+- details.call.code on a challenged pitch is the POST-challenge corrected call. The umpire's original must be flipped when isOverturned. Getting this backwards gives ~58% agreement — a coin flip.
+- StatsAPI omits no_pitch events (pitch-timer violations) from pitch_number; Savant counts them. Join on PitchRecord.savant_pitch_number.
+- Ground truth: strike iff at y=0.70833 ft, |x| <= 0.70833+0.12083 AND sz_bot-0.12083 <= z <= sz_top+0.12083. The ball radius on all four edges is load-bearing — dropping it takes agreement from 100% to 61%.
+- The 2026 season is still in progress. Filter on status.detailedState == "Final" and re-enumerate; never hardcode a game count.
+- Exclude automatic_ball (pitch-clock violations — nobody judged anything) and hit_by_pitch. Include blocked_ball.
+- Be polite to MLB: keep the 0.15s throttle in CachedFetcher, cache aggressively, never re-fetch on a re-run.
+
+## Working agreement
+
+- Don't ask permission for routine commands — just run them.
+- Verify empirically rather than reasoning from assumptions. Both critical red-team findings were things labelled [assumed] and then treated as settled. Two more came from opening the artefact (extracting video frames) rather than reasoning about it.
+- Quality gates fail loudly. When one fails, diagnose the root cause before touching the threshold — both gate failures during Phase 1 turned out to be real data phenomena, not code bugs.
+- Commit with substantive messages; push when a piece is done. git is at C:\Program Files\Git\cmd (on PATH). Use `git commit -F <file>` for multi-line messages — PowerShell here-strings mangle quotes.
+- Environment: Python 3.12.10, uv 0.12.17, ffmpeg 9.0.2, all on PATH. Native Windows, not WSL (virtualization is disabled in this machine's BIOS, and S: over WSL's 9P bridge would be slow for many small files). Run things with `uv run`.
+
+## Commands
+
+  uv run pytest -q
+  uv run jevpire acquire --games 10 --seed 42     # existing 10-game path
+  uv run jevpire verify pitches_10games_seed42.parquet
+  uv run jevpire summary pitches_10games_seed42.parquet
+  uv run jevpire video pitches_10games_seed42.parquet
+
+## Out of scope
+
+Any Jev API call, any prompt construction, any CV or video analysis, any metric beyond the gates, any season other than 2026.
+
+Separately and in parallel: Jev API access is waitlisted at console.typesafe.ai (the Vercel AI Gateway may be faster). It is the only remaining blocker on Part 1 and the longest lead time in the project.
+
+Start by reading docs/PLAN.md and docs/tasks/01-full-season-acquisition.md, then propose your implementation order before writing code.
